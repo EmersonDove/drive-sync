@@ -7,10 +7,12 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/drive/v3"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 )
 
 func main() {
@@ -35,11 +37,13 @@ func main() {
 	}
 
 	fmt.Println("Listing files and folders:")
-	listAllFiles(srv, "root", "")
+	initialLocalPath := "./clone" // Or any path you prefer
+	// Make this directory
+	os.MkdirAll(initialLocalPath, os.ModePerm)
+	listAllFiles(srv, "root", "", initialLocalPath)
 }
 
-func listAllFiles(srv *drive.Service, folderID string, indent string) {
-	// Fetch files and folders within the current folderID
+func listAllFiles(srv *drive.Service, folderID, indent, localPath string) { // Fetch files and folders within the current folderID
 	r, err := srv.Files.List().
 		Q(fmt.Sprintf("'%s' in parents", folderID)).
 		Fields("nextPageToken, files(id, name, mimeType)").
@@ -51,12 +55,17 @@ func listAllFiles(srv *drive.Service, folderID string, indent string) {
 	// Print each file and folder
 	for _, i := range r.Files {
 		if i.MimeType == "application/vnd.google-apps.folder" {
-			// If it's a folder, print its name and recurse into it
+			// Create local directory
+			newLocalPath := filepath.Join(localPath, i.Name)
+			os.MkdirAll(newLocalPath, os.ModePerm)
+
 			fmt.Printf("%s[Folder] %s\n", indent, i.Name)
-			listAllFiles(srv, i.Id, indent+"--")
+			listAllFiles(srv, i.Id, indent+"--", newLocalPath)
 		} else {
-			// If it's a file, print its name
-			fmt.Printf("%s[File] %s\n", indent, i.Name)
+			// Download the file
+			filePath := filepath.Join(localPath, i.Name)
+			fmt.Printf("%s[Downloading file] %s\n", indent, i.Name)
+			downloadFile(srv, i.Id, filePath)
 		}
 	}
 
@@ -74,11 +83,54 @@ func listAllFiles(srv *drive.Service, folderID string, indent string) {
 		for _, i := range r.Files {
 			if i.MimeType == "application/vnd.google-apps.folder" {
 				fmt.Printf("%s[Folder] %s\n", indent, i.Name)
-				listAllFiles(srv, i.Id, indent+"--")
+				listAllFiles(srv, i.Id, indent+"--", localPath)
 			} else {
 				fmt.Printf("%s[File] %s\n", indent, i.Name)
 			}
 		}
+	}
+}
+
+func downloadFile(srv *drive.Service, fileID, filePath string) {
+	tempFilePath := filePath + ".temp"
+
+	// Check if the final file already exists, if it does just return
+	if _, err := os.Stat(filePath); err == nil {
+		fmt.Printf("File %s already exists, skipping download\n", filePath)
+		return
+	}
+
+	// Delete any existing temp file from previous failed downloads
+	if _, err := os.Stat(tempFilePath); err == nil {
+		if err := os.Remove(tempFilePath); err != nil {
+			log.Fatalf("Unable to delete existing temp file: %v", err)
+		}
+	}
+
+	// Download the file
+	res, err := srv.Files.Get(fileID).Download()
+	if err != nil {
+		log.Fatalf("Unable to download file: %v", err)
+	}
+	defer res.Body.Close()
+
+	// Create a temp file
+	fmt.Printf("Writing file %s\n", tempFilePath)
+	f, err := os.Create(tempFilePath)
+	if err != nil {
+		log.Fatalf("Unable to create temp file: %v", err)
+	}
+	defer f.Close()
+
+	// Copy the contents to the temp file
+	_, err = io.Copy(f, res.Body)
+	if err != nil {
+		log.Fatalf("Unable to write to temp file: %v", err)
+	}
+
+	// Rename the temp file to the final file name
+	if err := os.Rename(tempFilePath, filePath); err != nil {
+		log.Fatalf("Unable to rename temp file to final file: %v", err)
 	}
 }
 
