@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func main() {
@@ -37,7 +38,7 @@ func main() {
 	}
 
 	fmt.Println("Listing files and folders:")
-	initialLocalPath := "./clone" // Or any path you prefer
+	initialLocalPath := "/Volumes/Google Drive Backup/edove@vt.edu-01:27:24" // Or any path you prefer
 	// Make this directory
 	os.MkdirAll(initialLocalPath, os.ModePerm)
 	listAllFiles(srv, "root", "", initialLocalPath)
@@ -107,30 +108,82 @@ func downloadFile(srv *drive.Service, fileID, filePath string) {
 		}
 	}
 
-	// Download the file
-	res, err := srv.Files.Get(fileID).Download()
+	// Get the file type
+	file, err := srv.Files.Get(fileID).Fields("mimeType").Do()
 	if err != nil {
-		log.Fatalf("Unable to download file: %v", err)
+		log.Printf("Unable to get file: %v", err)
+		appendFailedDownload(filePath)
+		return
 	}
-	defer res.Body.Close()
+
+	// Declare a reader for file content
+	var content io.ReadCloser
+	var isGoogleDocType bool
+
+	// Check if the file is a Google Doc type and export it, otherwise download it
+	if strings.HasPrefix(file.MimeType, "application/vnd.google-apps.") {
+		// It's a Google Doc type, export as PDF
+		resp, err := srv.Files.Export(fileID, "application/pdf").Download()
+		if err != nil {
+			log.Printf("Unable to export file: %v", err)
+			appendFailedDownload(filePath)
+			return
+		}
+		content = resp.Body
+		tempFilePath += ".pdf" // Add PDF extension to temp file
+		isGoogleDocType = true
+	} else {
+		// It's a downloadable file
+		resp, err := srv.Files.Get(fileID).Download()
+		if err != nil {
+			log.Printf("Unable to download file: %v", err)
+			appendFailedDownload(filePath)
+			return
+		}
+		content = resp.Body
+	}
+	defer content.Close()
 
 	// Create a temp file
 	fmt.Printf("Writing file %s\n", tempFilePath)
 	f, err := os.Create(tempFilePath)
 	if err != nil {
-		log.Fatalf("Unable to create temp file: %v", err)
+		log.Printf("Unable to create temp file: %v", err)
+		appendFailedDownload(filePath)
+		return
 	}
 	defer f.Close()
 
 	// Copy the contents to the temp file
-	_, err = io.Copy(f, res.Body)
+	_, err = io.Copy(f, content)
 	if err != nil {
-		log.Fatalf("Unable to write to temp file: %v", err)
+		log.Printf("Unable to write to temp file: %v", err)
+		appendFailedDownload(filePath)
+		return
 	}
 
 	// Rename the temp file to the final file name
-	if err := os.Rename(tempFilePath, filePath); err != nil {
-		log.Fatalf("Unable to rename temp file to final file: %v", err)
+	finalFilePath := filePath
+	if isGoogleDocType {
+		finalFilePath += ".pdf" // Add .pdf extension for Google Doc types
+	}
+	if err := os.Rename(tempFilePath, finalFilePath); err != nil {
+		log.Printf("Unable to rename temp file to final file: %v", err)
+		appendFailedDownload(filePath)
+	}
+}
+
+// appendFailedDownload logs the failed download path to a text file
+func appendFailedDownload(filePath string) {
+	f, err := os.OpenFile("failed_downloads.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("Unable to open failed downloads log file: %v", err)
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(filePath + "\n"); err != nil {
+		log.Printf("Unable to write to failed downloads log file: %v", err)
 	}
 }
 
