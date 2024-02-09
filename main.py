@@ -34,7 +34,7 @@ def main():
     service = build('drive', 'v3', credentials=creds)
 
     print("Listing files and folders:")
-    initial_local_path = "./clone"  # Or any path you prefer
+    initial_local_path = "/Volumes/Google Drive Backup/edove@vt.edu-01:27:24"  # Or any path you prefer
     # Make this directory
     os.makedirs(initial_local_path, exist_ok=True)
     list_all_files(service, 'root', '', initial_local_path)
@@ -46,6 +46,14 @@ def write_failed_folder(folder_id: str, folder_name: str, error: str):
     """
     with open('./failed_folders.txt', 'a') as f:
         f.write(f"{folder_id},{folder_name},{error}\n")
+
+
+def write_failed_downloads(file_id: str, file_name: str, error: str):
+    """
+    Append a line to ./failed_downloads.txt with the file_id and error
+    """
+    with open('./failed_downloads.txt', 'a') as f:
+        f.write(f"{file_id},{file_name},{error}\n")
 
 
 def list_all_files(service, folder_id, indent, local_path):
@@ -82,7 +90,12 @@ def list_all_files(service, folder_id, indent, local_path):
                     # Download the file
                     file_path = os.path.join(local_path, item['name'] + '.pdf' if item['mimeType'].startswith('application/vnd.google-apps.') else item['name'])
                     print(f"{indent}[Downloading file] {item['name']}")
-                    download_file(service, item['id'], file_path, item['mimeType'])
+                    try:
+                        download_file(service, item['id'], file_path, item['mimeType'])
+                    except Exception as e:
+                        print(f"{indent}Failed to download file {item['name']} with error: {e}")
+                        write_failed_downloads(item['id'], file_path, str(e))
+
 
         if page_token is None:
             print(f"{indent}Completed folder {folder_id}.")
