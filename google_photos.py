@@ -75,9 +75,8 @@ def download_photos():
                     print(f'Duplicate file found: {item["filename"]}')
                     path_split = Path(file_path)
                     new_path = path_split.parent / 'duplicate' / f'{path_split.stem}-{uuid.uuid4()}{path_split.suffix}'
-                    with open(file_path, 'rb') as f:
-                        with open(new_path, 'wb') as f2:
-                            f2.write(f.read())
+                    with open(new_path, 'wb') as f2:
+                        f2.write(response.content)
             else:
                 print(f'Failed to download {item["filename"]}')
 
