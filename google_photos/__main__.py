@@ -52,7 +52,7 @@ def download_photos(creds_):
             fields="nextPageToken,mediaItems(baseUrl,filename,mediaMetadata)",
             pageToken=nextPageToken).execute()
         items = results.get('mediaItems', [])
-        nextPageToken = None # results.get('nextPageToken')
+        nextPageToken = results.get('nextPageToken')
 
         if not items:
             print('No files found.')
