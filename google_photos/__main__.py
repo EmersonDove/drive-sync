@@ -7,13 +7,17 @@ from googleapiclient.discovery import build
 import requests
 from pathlib import Path
 import uuid
+from database import Asset, FailedAsset, session
+import datetime
+from dateutil import parser
+import logging
 
 # Folder to save the downloaded photos
 download_folder = './photos'
-duplicate_folder = './photos/duplicate'
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ['https://www.googleapis.com/auth/photoslibrary.readonly']
+
 
 def login():
     creds = None
@@ -37,9 +41,8 @@ def login():
     return creds
 
 
-def download_photos():
-    creds = login()
-    service = build('photoslibrary', 'v1', credentials=creds, static_discovery=False)
+def download_photos(creds_):
+    service = build('photoslibrary', 'v1', credentials=creds_, static_discovery=False)
 
     nextPageToken = None
     while True:
@@ -49,7 +52,7 @@ def download_photos():
             fields="nextPageToken,mediaItems(baseUrl,filename,mediaMetadata)",
             pageToken=nextPageToken).execute()
         items = results.get('mediaItems', [])
-        nextPageToken = results.get('nextPageToken')
+        nextPageToken = None # results.get('nextPageToken')
 
         if not items:
             print('No files found.')
@@ -60,25 +63,39 @@ def download_photos():
             if 'video' in item['mediaMetadata']:
                 modifier = '=dv'  # Modifier for downloading the original video
             else:
-                modifier = '=d'   # Modifier for downloading the full resolution image
+                modifier = '=d'  # Modifier for downloading the full resolution image
 
             file_path = os.path.join(download_folder, item['filename'])
             download_url = item['baseUrl'] + modifier
             response = requests.get(download_url)
-            if response.status_code == 200:
-                if not os.path.exists(file_path):  # Avoid re-downloading files
-                    with open(file_path, 'wb') as f:
-                        f.write(response.content)
-                    print(f'Downloaded {item["filename"]}')
-                else:
-                    # Write the file to a /duplicate/ folder as a uuid with the same suffix
-                    print(f'Duplicate file found: {item["filename"]}')
-                    path_split = Path(file_path)
-                    new_path = path_split.parent / 'duplicate' / f'{path_split.stem}-{uuid.uuid4()}{path_split.suffix}'
-                    with open(new_path, 'wb') as f2:
-                        f2.write(response.content)
+            if not response.status_code == 200:
+                path_split = Path(file_path)
+                file_id = f'{path_split.stem}-{uuid.uuid4()}{path_split.suffix}'
+                new_path = path_split.parent / file_id
+                with open(new_path, 'wb') as f2:
+                    f2.write(response.content)
+
+                with session() as db:
+                    db.add(Asset(
+                        id=str(uuid.uuid4()),
+                        creation_time=parser.parse(item['mediaMetadata']['creationTime']),
+                        filename=item['filename'],
+                        suffix=path_split.suffix,
+                        asset_metadata=item['mediaMetadata'],
+                        file_id=file_id,
+                        physical_path=str(new_path),
+                    ))
+
+                logging.info(f"Downloaded {item['filename']} - shot at {item['mediaMetadata']['creationTime']}")
             else:
-                print(f'Failed to download {item["filename"]}')
+                # Write a failed assets object to database
+                with session() as db:
+                    db.add(FailedAsset(
+                        id=str(uuid.uuid4()),
+                        filename=item['filename'],
+                        error=response.text
+                    ))
+                logging.error(f"Failed to download {item['filename']} - {response.status_code}")
 
         if not nextPageToken:
             break  # Exit the loop if there's no more pages to fetch
@@ -87,10 +104,9 @@ def download_photos():
 
 
 if __name__ == '__main__':
+    creds = login()
+
     if not os.path.exists(download_folder):
         os.makedirs(download_folder)
 
-    if not os.path.exists(duplicate_folder):
-        os.makedirs(duplicate_folder)
-
-    download_photos()
+    download_photos(creds)
