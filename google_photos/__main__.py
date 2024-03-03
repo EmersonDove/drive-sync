@@ -68,7 +68,7 @@ def download_photos(creds_):
             file_path = os.path.join(download_folder, item['filename'])
             download_url = item['baseUrl'] + modifier
             response = requests.get(download_url)
-            if not response.status_code == 200:
+            if response.status_code == 200:
                 path_split = Path(file_path)
                 file_id = f'{path_split.stem}-{uuid.uuid4()}{path_split.suffix}'
                 new_path = path_split.parent / file_id
